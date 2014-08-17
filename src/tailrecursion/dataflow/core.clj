@@ -14,14 +14,18 @@
 ;;  Created 10 March 2009
 
 
-(ns jls.dataflow.dataflow
+(ns
+  #^{:author "Jeffrey Straszheim",
+     :doc "A library to support a dataflow model of state"}
+  tailrecursion.dataflow.core
   (:use [clojure.set :only (union intersection difference)])
   (:use [clojure.contrib.graph :only (directed-graph
                                       reverse-graph
                                       dependency-list
                                       get-neighbors)])
-  (:use [clojure.contrib.walk :only (postwalk)])
-  (:use [clojure.contrib.except :only (throwf)]))
+  (:use [clojure.walk :only (postwalk)])
+  (:use [clojure.contrib.except :only (throwf)])
+  (:import java.io.Writer))
 
 
 ;;; Chief Data Structures
@@ -67,7 +71,7 @@
 
 ;; A sentinal value
 
-(def *empty-value* (java.lang.Object.))
+(def sentinel (java.lang.Object.))
 
 
 ;; Dataflow
@@ -97,11 +101,16 @@
      (> (count cells) 1) (throwf Exception "Cell %s has multiple instances" name)
      :otherwise (throwf Exception "Cell %s is undefined" name))))
 
+(defn source-cell?
+  "Is this cell a source cell?"
+  [cell]
+  (isa? (:cell-type cell) ::source-cell))
+
 (defn get-source-cells
   "Returns a collection of source cells from the dataflow"
   [df]
   (for [cell (:cells @df)
-        :when (isa? (:cell-type cell) ::source-cell)]
+        :when (source-cell? cell)]
     cell))
 
 (defn get-value
@@ -111,7 +120,7 @@
   [df name]
   (let [cell (get-cell df name)
         result @(:value cell)]
-    (do (when (= *empty-value* result)
+    (do (when (= sentinel result)
           (throwf Exception "Cell named %s empty" name))
         result)))
 
@@ -121,7 +130,7 @@
   (let [cells (get-cells df name)
         results (map #(-> % :value deref) cells)]
     (do
-      (when (some #(= % *empty-value*) results)
+      (when (some #(= % sentinel) results)
         (throwf Exception "At least one empty cell named %s found" name))
       results)))
 
@@ -218,13 +227,13 @@
 
 ;;; Cell building
 
-(def *meta* {:type ::dataflow-cell})
+(def cell-meta {:type ::dataflow-cell})
 
 (defn build-source-cell
   "Builds a source cell"
   [name init]
   (with-meta (struct source-cell name (ref init) ::source-cell)
-             *meta*))
+             cell-meta))
 
 (defn- is-col-var?
   [symb]
@@ -284,14 +293,14 @@
 (defn build-standard-cell
   "Builds a standard cell"
   [name deps fun expr]
-  (with-meta (struct standard-cell name (ref *empty-value*) deps fun expr ::cell)
-             *meta*))
+  (with-meta (struct standard-cell name (ref sentinel) deps fun expr ::cell)
+             cell-meta))
 
 (defn build-validator-cell
   "Builds a validator cell"
   [deps fun expr]
   (with-meta (struct validator-cell ::validator deps fun expr ::validator-cell)
-             *meta*))
+             cell-meta))
 
 (defmacro cell
   "Build a standard cell, like this:
@@ -408,11 +417,12 @@
                      (let [[changed ov] (try
                                          (eval-cell df data old cell)
                                          (catch Exception e
-                                           (throw (Exception. (str cell) e))))]
+                                           (throw (Exception. (str cell) e))))
+                           nn (disj needed cell)]
                        (if changed
-                         [(union needed (get-neighbors (:fore-graph @df) cell))
+                         [(union nn (get-neighbors (:fore-graph @df) cell))
                           (assoc old (:name cell) ov)]
-                         [needed old])))
+                         [nn old])))
               [new-needed new-old] (reduce step
                                            [needed old]
                                            (intersection now needed))]
@@ -490,8 +500,8 @@
   (get-value df 'sally)
   (get-value df 'greg)
 
-  (use :reload 'jls.dataflow.dataflow)
-  (use 'clojure.contrib.stacktrace) (e)
+  (use :reload 'clojure.contrib.dataflow)
+  (use 'clojure.stacktrace) (e)
   (use 'clojure.contrib.trace)
 )
     
